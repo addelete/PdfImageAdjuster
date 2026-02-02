@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  # JAR 构建已移除，不再需要
+  # build-jar:
+  #   runs-on: ubuntu-latest
+  #   ...
+
+  build-and-release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # 暂时只编译 Windows，等 Windows 跑通后再启用其他平台
+        os: [windows-latest]
+        # os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # - os: ubuntu-latest
+          #   target: packageDeb
+          #   artifact: '*.deb'
+          - os: windows-latest
+            target: packageExe
+            artifact: '*.exe'
+          # - os: macos-latest
+          #   target: packageDmg
+          #   artifact: '*.dmg'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Extract version from tag
+        id: get_version
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build package
+        run: ./gradlew ${{ matrix.target }} --no-configuration-cache
+        env:
+          APP_VERSION: ${{ steps.get_version.outputs.VERSION }}
+
+      # - name: Upload artifacts (Linux)
+      #   if: matrix.os == 'ubuntu-latest'
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: ${{ matrix.os }}-artifacts
+      #     path: composeApp/build/compose/binaries/main/deb/*.deb
+
+      # - name: Upload artifacts (macOS)
+      #   if: matrix.os == 'macos-latest'
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: ${{ matrix.os }}-artifacts
+      #     path: composeApp/build/compose/binaries/main/dmg/*.dmg
+
+      # MSI 已移除，只保留 EXE
+      # - name: Upload artifacts (Windows MSI)
+      #   if: matrix.os == 'windows-latest'
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: windows-msi-artifacts
+      #     path: composeApp/build/compose/binaries/main/msi/*.msi
+
+      - name: Upload artifacts (Windows EXE)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe-artifacts
+          path: composeApp/build/compose/binaries/main/exe/*.exe
+
+  create-release:
+    needs: [build-and-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整的 git 历史和 tag 信息
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Get tag message
+        id: tag_message
+        run: |
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' v${{ steps.get_version.outputs.VERSION }})
+          # 如果 tag message 为空，使用默认消息
+          if [ -z "$TAG_MESSAGE" ]; then
+            TAG_MESSAGE="Release ${{ steps.get_version.outputs.VERSION }}"
+          fi
+          # 转义换行符和引号以便在 JSON 中使用
+          TAG_MESSAGE="${TAG_MESSAGE//$'\n'/\\n}"
+          TAG_MESSAGE="${TAG_MESSAGE//\"/\\\"}"
+          echo "TAG_MESSAGE=$TAG_MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update version.json
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          TAG_MESSAGE="${{ steps.tag_message.outputs.TAG_MESSAGE }}"
+          cat > version.json << EOF
+          {
+            "version": "$VERSION",
+            "release_notes": "$TAG_MESSAGE"
+          }
+          EOF
+
+      - name: Commit and push version.json
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add version.json
+          git commit -m "Update version.json to ${{ steps.get_version.outputs.VERSION }}"
+          git push origin HEAD:main
