@@ -96,6 +96,15 @@ compose.desktop {
                 // Windows 特定配置
                 menuGroup = "PDF Tools"
                 upgradeUuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                iconFile.set(project.file("src/jvmMain/resources/icons/windows/app.ico"))
+            }
+
+            macOS {
+                iconFile.set(project.file("src/jvmMain/resources/icons/macos/app.icns"))
+            }
+
+            linux {
+                iconFile.set(project.file("src/jvmMain/resources/icons/linux/app.png"))
             }
         }
     }
